@@ -72,22 +72,24 @@ class __C_Data__:
                    for x in range(image_count)] 
                    for i in range(self._X)]
 
-    def global_explore(self, not_idx) -> Globals:
-        _train = self.extract(not_idx)
+    def global_explore(self, not_idx:Sequence[int]) -> Globals:
+        _x = self.extract(not_idx)
+
+        _total = sum([self._n[i] for i in range(self._X) if i not in not_idx])
 
         _g_std  = []
         _g_max  = []
         _g_min  = []
         _g_mean = [] 
 
-        for _group in _train:
+        for _group in _x:
             for _group_i in _group:
                 _g_max.append(np.max(_group_i))
                 _g_min.append(np.min(_group_i))
                 _g_mean.append(np.mean(_group_i))
                 _g_std.append(np.std(_group_i))
 
-        return (max(_g_max), min(_g_min), sum(_g_std) / self._total, sum(_g_mean) / self._total)
+        return (max(_g_max), min(_g_min), sum(_g_std) / _total, sum(_g_mean) / _total)
 
     def data_search(self):
         _min_images = []
@@ -173,29 +175,30 @@ class DataDescriptor:
         self.props = len(instance._X[value])
 
 class __C_DataSet__(Dataset):
-    x1 = DataDescriptor("b1")
-    x2 = DataDescriptor("b2")
-    x3 = DataDescriptor("b3")
-    x4 = DataDescriptor("b4")
+    #x1 = DataDescriptor("b1")
+    #x2 = DataDescriptor("b2")
+    #x3 = DataDescriptor("b3")
+    #x4 = DataDescriptor("b4")
+    #x5 = DataDescriptor("b5")
 
-    def __init__(self, train_X, p:Properties):
+    def __init__(self, x, p:Properties):
         super().__init__()
-        self._X = train_X
-        self.x1 = 0
-        self.x2 = 1
-        self.x3 = 2
-        self.x4 = 3
+        self._X = x
+        #_data_descr_l = [self.x1, self.x2, self.x3, self.x4, self.x5]
+        #for i in range(self._X):
+        #    _data_descr_l[i] = i
         self._prop = p
         
     @property
     def dims(self):
-        return {"groups" : len(self._X), 
-                 "group": 
-                 {0: len(self._X[0]),
-                  1: len(self._X[1]),
-                  2: len(self._X[2]),
-                  3: len(self._X[3])}}
-    
+        a = ((x, len(self._X[x])) for x in range(len(self._X)))
+
+        _d = dict({"groups" : len(self._X), "group" : {}})
+        for _entry in a:
+            _d["group"][_entry[0]] = _entry[1]
+
+        return _d
+        
     def details(self, d_brain_x, d_point_x):
         return (len(self._X[d_brain_x][d_point_x]), len(self._X[d_brain_x][d_point_x][0]))
 
