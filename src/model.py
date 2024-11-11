@@ -142,8 +142,8 @@ class __C_VariatonalEncoder__(nn.Module, __C_Module__):
     def forward(self, x):
         latent_v_mu, latent_repr = self._sub_modules["encoder"](x)
         
-        x = self._latent_fnct(latent_v_mu, latent_repr)
-    
+        x = self.latent_repr(latent_v_mu, latent_repr)
+
         return (latent_v_mu, latent_repr, self._sub_modules["decoder"](x))
 
     def c_train_step(self, x, /, *, alpha, beta, gamma,
@@ -178,8 +178,11 @@ class __C_VariatonalEncoder__(nn.Module, __C_Module__):
 
             print(f"Loss for ep={ep+1} => {_total_loss / len(x):.2f}")
 
+    def latent_repr(self, latent_v_mu, latent_v_repr):
+        return self._latent_fnct(latent_v_mu, latent_v_repr)
+
     def c_inference(self, x):
-        self.train(False)
+        self.eval()
 
         x = x.to(self._device)
 
@@ -189,7 +192,7 @@ class __C_VariatonalEncoder__(nn.Module, __C_Module__):
         return (latent_v_mu.to("cpu"), latent_v_std.to("cpu"), x_prime.to("cpu"))
 
     def c_encode(self, x):
-        self.train(False)
+        self.eval()
 
         x = x.to(self._device)
 
@@ -202,11 +205,28 @@ class __C_VariatonalEncoder__(nn.Module, __C_Module__):
         self.eval()
 
         _rands = torch.randn((samples, self._latent_dim))
+        _rands_i = torch.randn((samples, *self._input_dim))
 
         _rands = _rands.to(self._device)
+        _rands_i = _rands_i.to(self._device)
 
         with torch.no_grad():
-            x_prime = self._sub_modules["decoder"](_rands)
+                self._sub_modules["encoder"](_rands_i) # update pooling indices
+                x_prime = self._sub_modules["decoder"](_rands)
+
+        return x_prime.to("cpu")
+    
+    def c_decode_from_latent(self, latent_reprs:torch.Tensor):
+        self.eval()
+
+        _rands_i = torch.randn((latent_reprs.shape[0], *self._input_dim))
+
+        _rands_i = _rands_i.to(self._device)
+        _latent_reprs = latent_reprs.to(self._device)
+
+        with torch.no_grad():
+            self._sub_modules["encoder"](_rands_i) # update pooling indices
+            x_prime = self._sub_modules["decoder"](_latent_reprs)
 
         return x_prime.to("cpu")
 
@@ -290,7 +310,7 @@ class __C_VariatonalEncoder__(nn.Module, __C_Module__):
         _total_param_enc = sum(x[1] for x in _info_enc)
         _total_param_dec = sum(x[1] for x in _info_dec)
         f("\t-----")
-        f(f"|\t|VAE| : Total Parameters => {_total_param_enc + _total_param_dec}")
+        f(f"\t|VAE| : Total Parameters => {_total_param_enc + _total_param_dec}")
         f("\t-----")
         def info_func_arch(x, y, idx):
             f(f"\t==> Module : {idx} => " \
@@ -390,13 +410,13 @@ class __C_Encoder__(nn.Module, __C_Module__):
         self._flatten_module_list.append(nn.Flatten())
         self._flatten_module_list.append(
             nn.Linear((_spatial[0]*_spatial[1]*_channels), latent_dim*2))
-        self._flatten_module_list.append(nn.Tanh())
+        self._flatten_module_list.append(nn.LeakyReLU())
         self._flatten_module_list.append(
-            nn.Linear(latent_dim*2, latent_dim)) # used for mean
-        self._flatten_module_list.append(nn.ReLU())
+            nn.Linear(latent_dim*2, latent_dim))
+        # self._flatten_module_list.append(nn.ReLU())
         self._flatten_module_list.append(
-            nn.Linear(latent_dim*2, latent_dim)) # used for std
-        self._flatten_module_list.append(nn.ReLU())
+            nn.Linear(latent_dim*2, latent_dim))
+        #self._flatten_module_list.append(nn.ReLU())
 
         __C_Decoder__._down_sampling_spatial = list(reversed(_down_sampling_spatial))
 
@@ -409,17 +429,16 @@ class __C_Encoder__(nn.Module, __C_Module__):
 
     def forward(self, x):
         _indices = []
-        for i in range(len(self._flatten_module_list)-4):
+        for i in range(len(self._flatten_module_list)-2):
             if isinstance(self._flatten_module_list[i], nn.MaxPool2d):
                 x, indices = self._flatten_module_list[i](x)
                 _indices.append(indices)
             else:
                 x = self._flatten_module_list[i](x)
-        _x_f = self._flatten_module_list[-4](x)
-        _x_s = self._flatten_module_list[-2](x)
+        _x_f = self._flatten_module_list[-2](x)
+        _x_s = self._flatten_module_list[-1](x)
         __C_Decoder__._pooling_indices = list(reversed(_indices))
-        return (self._flatten_module_list[-3](_x_f), 
-                self._flatten_module_list[-1](_x_s))
+        return (_x_f, _x_s)
 
 class __C_Decoder__(nn.Module, __C_Module__):
     def __init__(self, enc_module_list, filter, spatial):
@@ -462,7 +481,7 @@ class __C_Decoder__(nn.Module, __C_Module__):
                         pass
                 self._module_list.append(_mod_actv)
 
-        self._module_list = self._module_list[2:] # cut out first two layers (sub latent + activ)
+        self._module_list = self._module_list[1:] # cut out first layer (sub latent)
 
     def forward(self, x):
         _c = 0
