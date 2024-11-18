@@ -9,6 +9,7 @@ import os
 import numpy as np
 from utils import utilty
 from sklearn.decomposition import PCA
+from utils import plotter
 
 _c_data = __C_Data__("../data/cell_data.h5", 'r')
 
@@ -56,7 +57,7 @@ def task_1():
 ##########################
 
 _test_idx = 3
-tilesize = 156
+tilesize = 128
 
 max, min, std, mean = _c_data.global_explore([_test_idx])
 max_t, min_t, std_t, mean_t = _c_data.global_explore(
@@ -73,15 +74,7 @@ _datasampler = __C_DataSampler__(_c_const._c_strat_skip, _dataset, tilesize, 100
 _dataloader  = __C_DataLoader__(_dataset, _datasampler, 64)
 _n_e = next(iter(_dataloader))
 
-fig, axes = plt.subplots(2, 4)
-
-_c = 0
-for i in range(2):
-    for j in range(4):
-        axes[i,j].imshow(_n_e[_c].numpy().reshape(tilesize, tilesize, 1))
-        _c += 1
-
-plt.show()
+plotter.plot2D(_n_e, rows=2, cols=5, shape=(tilesize, tilesize, 1))
 
 x = torch.cuda.is_available()
 z = torch.cuda.device_count()
@@ -103,11 +96,11 @@ vae.architecture(print_function)
 vae.summary(print_function)
 vae = vae.to(_device)
 
-vae.c_link(opt.Adam(vae.parameters(), 1e-3), _device)
+vae.c_link(opt.SGD(vae.parameters(), 1e-3), _device)
 vae.downstream_link(None, _device)
 
-vae.c_train(_dataloader, 10, alpha=0.9, beta=1, gamma=1e-6,
-            loss_regulizer=l2_regulazation_loss)
+vae.c_train(_dataloader, 50, alpha=0.95, beta=4, gamma=1e-7,
+            loss_regulizer=l1_regulazation_loss)
 
 _n_e = next(iter(_dataloader))
 
@@ -115,29 +108,13 @@ print("Recreating images")
 
 latent_v_mu, latent_v_std, x_prime = vae.c_inference(_n_e)
 
-fig, axes = plt.subplots(2, 4)
-
-_c = 0
-for i in range(2):
-    for j in range(4):
-        axes[i,j].imshow(x_prime[_c].numpy().reshape(tilesize, tilesize, 1))
-        _c += 1
-
-plt.show()
+plotter.plot2D(x_prime, rows=2, cols=4, shape=(tilesize, tilesize, 1))
 
 print("Sampling from model")
 
 x_prime = vae.c_decode(10)
 
-fig, axes = plt.subplots(2, 5)
-
-_c = 0
-for i in range(2):
-    for j in range(5):
-        axes[i,j].imshow(x_prime[_c].numpy().reshape(tilesize, tilesize, 1))
-        _c += 1
-
-plt.show()
+plotter.plot2D(x_prime, rows=2, cols=4, shape=(tilesize, tilesize, 1))
 
 _src_dir = os.path.dirname(__file__)
 _tgt_dir = os.path.join(_src_dir, "..", "model", "saved_model.pt")
@@ -193,25 +170,8 @@ _latent_repr_interpolated_sec = torch.squeeze(_latent_repr_interpolated_sec)
 _interpolated_images_reg = vae.c_decode_from_latent(_latent_repr_interpolated_reg)
 _interpolated_images_sec = vae.c_decode_from_latent(_latent_repr_interpolated_sec)
 
-fig, axes = plt.subplots(2, 5)
-
-_c = 0
-for i in range(2):
-    for j in range(5):
-        axes[i,j].imshow(_interpolated_images_reg[_c].numpy().reshape(tilesize, tilesize, 1))
-        _c += 1
-
-plt.show()
-
-fig, axes = plt.subplots(2, 5)
-
-_c = 0
-for i in range(2):
-    for j in range(5):
-        axes[i,j].imshow(_interpolated_images_sec[_c].numpy().reshape(tilesize, tilesize, 1))
-        _c += 1
-
-plt.show()
+plotter.plot2D(_interpolated_images_reg, rows=2, cols=5, shape=(tilesize, tilesize, 1))
+plotter.plot2D(_interpolated_images_sec, rows=2, cols=5, shape=(tilesize, tilesize, 1))
 
 _latent_representations = []
 
