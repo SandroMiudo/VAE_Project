@@ -1,13 +1,14 @@
 from torch.utils.data import DataLoader
 from torch.utils.data import Dataset
 from torch.utils.data import Sampler
-from typing import Tuple, Sequence
+from typing import Tuple, Sequence, Callable
 import numpy as np
 import torch
 import random
 from utils._c_const import _c_strat_pad, _c_strat_skip
-from utils._c_types import Properties, Globals
+from utils._c_types import Properties, Globals, NdArrayLike, MapLike
 import h5py
+from PIL import Image
 
 class __C_Data__:
     _d_group = dict()
@@ -236,6 +237,28 @@ class __C_DataSet__(Dataset):
     
     def __len__(self):
         return sum(self.dims["group"].values())
+    
+    def map(self, map_fnct:Callable[[NdArrayLike, MapLike], 
+                                     NdArrayLike], **kw) -> '__C_DataSet__':
+        _dims = self.dims
+        _new_X = [[map_fnct(self._X[i][j], kw) for j in range(_dims["group"][i])] 
+                  for i in range(_dims["groups"])]
+
+        return __C_DataSet__(_new_X, self._prop) # we have to adjust the properties
+        
+    def concat(self, dataset:'__C_DataSet__') -> '__C_DataSet__':
+        for i in range(len(self._X)):
+            self._X[i].extend(dataset._X[i])
+        return self
+
+    def augment_seq(self, map_fncts:Sequence[Callable[[NdArrayLike, MapLike], 
+                                                       NdArrayLike]], **kw) -> '__C_DataSet__':
+        _new_X = [self.map(map_fnct, kw) for map_fnct in map_fncts]
+
+        _d = self
+        for x in _new_X:
+            _d = _d.concat(x)
+        return _d
     
 class __C_DataSampler__(Sampler):
 
