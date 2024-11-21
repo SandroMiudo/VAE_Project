@@ -79,12 +79,13 @@ class __C_BlockBuilder__():
                 _conv_i = nn.Conv2d(filter, filter, (kernel,kernel), (1,1), 
                                 padding='valid')
             self._blocks.append(_conv_i)
+            self._blocks.append(nn.BatchNorm2d(filter))
 
             match x_feature_map:
                 case _c_const._c_strat_relu:
                     _act_i = nn.ReLU()
                 case _c_const._c_strat_l_relu:
-                    _act_i = nn.LeakyReLU(0.001)
+                    _act_i = nn.LeakyReLU()
                 case _c_const._c_strat_sigmoid:
                     _act_i = nn.Sigmoid()
                 case _c_const._c_strat_tanh:
@@ -98,7 +99,7 @@ class __C_BlockBuilder__():
         return self._blocks
     
     def out_shape(self, initial_dim:tuple[int, int]):
-        _len = len(self._blocks) // 2 # exclude activations
+        _len = len(self._blocks) // 3 # exclude activations, batch norm
         _strides = self._blocks[0].stride
         _kernel  = self._blocks[0].kernel_size
         _red_0 = initial_dim[0] - (((initial_dim[0] - _kernel[0]) // _strides[0]) + 1)
@@ -183,17 +184,13 @@ class __C_VariatonalEncoder__(nn.Module, __C_Module__):
     # loss_regulizer : regulazation function to use
     def c_train(self, x, /, epoch, *, alpha=1, beta=1, gamma=1, 
                 loss_regulizer:Callable[[float, Iterator[nn.Parameter]], None]=l1_regulazation_loss,
-                debug_mode: str | int | bool=False, debug_start:int=1):
+                debug_mode: str | bool=False, debug_start:int=1):
         _debug_modes = ["batch", "epoch"]
-        if isinstance(debug_mode, int) and 0 > debug_mode >= len(_debug_modes):
-            raise ValueError()
-        elif isinstance(debug_mode, int):
-            debug_mode = _debug_modes[debug_mode]
 
         if isinstance(debug_mode, str) and debug_mode not in _debug_modes:
             raise ValueError()
-        if isinstance(debug_mode, bool) and debug_mode == True:
-            debug_mode = _debug_modes[0]
+        if isinstance(debug_mode, bool) and debug_mode:
+            debug_mode = _debug_modes[1]
         
         if debug_mode:
             activations, gradients = self._register_hookups()
@@ -510,7 +507,7 @@ class __C_Decoder__(nn.Module, __C_Module__):
         self._module_list = nn.ModuleList()
         _channels = filter
         for i in range(len(_rv_mod_list)):
-            if isinstance(_rv_mod_list[i], (nn.ReLU, nn.LeakyReLU, nn.Sigmoid, nn.Tanh)):
+            if isinstance(_rv_mod_list[i], (*_c_const._c_activations, nn.BatchNorm2d)):
                 continue
             _mod = _rv_mod_list[i]
 
@@ -529,22 +526,34 @@ class __C_Decoder__(nn.Module, __C_Module__):
                 self._module_list.append(
                     nn.ConvTranspose2d(_mod.out_channels, _mod.in_channels,
                                        _mod.kernel_size, _mod.stride))
-            if i > 0 and isinstance(_rv_mod_list[i-1], (nn.ReLU, nn.LeakyReLU, 
-                                                        nn.Sigmoid, nn.Tanh)):
-                match type(_rv_mod_list[i-1]):
-                    case nn.ReLU:
-                       _mod_actv = nn.ReLU()
-                    case nn.LeakyReLU:
-                       _mod_actv = nn.LeakyReLU() 
-                    case nn.Sigmoid:
-                       _mod_actv = nn.Sigmoid()
-                    case nn.Tanh:
-                       _mod_actv = nn.Tanh()
-                    case _:
-                        pass
-                self._module_list.append(_mod_actv)
+                
+            if i == len(_rv_mod_list) - 1:
+                break
+
+            if isinstance(_rv_mod_list[i-1], nn.BatchNorm2d):
+                self._module_list.append(nn.BatchNorm2d(_mod.in_channels))
+            
+            if isinstance(_rv_mod_list[i-1], _c_const._c_activations):
+                self._module_list.append(self._apply_activation(i-1, _rv_mod_list))
+            elif isinstance(_rv_mod_list[i-2], _c_const._c_activations):
+                self._module_list.append(self._apply_activation(i-2, _rv_mod_list))
 
         self._module_list = self._module_list[1:] # cut out first layer (sub latent)
+
+    def _apply_activation(self, idx, rev_mod_list):
+        match type(rev_mod_list[idx]):
+            case nn.ReLU:
+                _mod_actv = nn.ReLU()
+            case nn.LeakyReLU:
+                _mod_actv = nn.LeakyReLU() 
+            case nn.Sigmoid:
+                _mod_actv = nn.Sigmoid()
+            case nn.Tanh:
+                _mod_actv = nn.Tanh()
+            case _:
+                pass
+
+        return _mod_actv
 
     def forward(self, x):
         _c = 0
