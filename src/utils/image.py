@@ -1,6 +1,5 @@
-from PIL import Image, ImageOps, ImageEnhance
+from PIL import Image, ImageOps, ImageEnhance, ImageFilter
 from PIL.Image import Image as img
-from PIL.Image import ImageFilter
 from ._c_types import NdArrayLike
 import numpy as np
 import random
