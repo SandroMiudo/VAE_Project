@@ -1,5 +1,6 @@
 from . import _c_types
 from . import _c_const
+import psutil
 
 from typing import TypeVar
 from typing import List
@@ -17,3 +18,10 @@ def flatten(l:List[T], f:T) -> T:
         f.extend(_l)
 
     return f
+
+def cpu_count():
+    #return len(os.sched_getaffinity(0)) # 0 -> current process, does return logical cpus somehow
+    return psutil.cpu_count(logical=False)
+
+def cpu_count_logical():
+    return psutil.cpu_count()
