@@ -8,7 +8,7 @@ import random
 from utils._c_const import _c_strat_pad, _c_strat_skip
 from utils._c_types import Properties, Globals, NdArrayLike, MapLike
 import h5py
-from PIL import Image
+import utils.utilty as util
 
 class __C_Data__:
     _d_group = dict()
@@ -241,7 +241,7 @@ class __C_DataSet__(Dataset):
     def map(self, map_fnct:Callable[[NdArrayLike, MapLike], 
                                      NdArrayLike], **kw) -> '__C_DataSet__':
         _dims = self.dims
-        _new_X = [[map_fnct(self._X[i][j], kw) for j in range(_dims["group"][i])] 
+        _new_X = [[map_fnct(self._X[i][j], **kw) for j in range(_dims["group"][i])] 
                   for i in range(_dims["groups"])]
 
         return __C_DataSet__(_new_X, self._prop) # we have to adjust the properties
@@ -253,7 +253,7 @@ class __C_DataSet__(Dataset):
 
     def augment_seq(self, map_fncts:Sequence[Callable[[NdArrayLike, MapLike], 
                                                        NdArrayLike]], **kw) -> '__C_DataSet__':
-        _new_X = [self.map(map_fnct, kw) for map_fnct in map_fncts]
+        _new_X = [self.map(map_fnct, **kw) for map_fnct in map_fncts]
 
         _d = self
         for x in _new_X:
@@ -297,5 +297,10 @@ class __C_DataSampler__(Sampler):
         return self._samples
 
 class __C_DataLoader__(DataLoader):
-    def __init__(self, dataset, sampler, batch_size):
-        super().__init__(dataset, batch_size, sampler=sampler)
+    def __init__(self, dataset, sampler, batch_size, worker_fnct:Callable[[int], None]=None):
+        cpu_physical = util.cpu_count()
+        cpu_logical  = util.cpu_count_logical()
+        print(f"Cpu physical => {cpu_physical}")
+        print(f"Cpu logical  => {cpu_logical}")
+        super().__init__(dataset, batch_size, sampler=sampler, num_workers=cpu_physical,
+                         worker_init_fn=worker_fnct)
