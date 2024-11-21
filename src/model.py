@@ -6,6 +6,7 @@ import utils.utilty as util
 import utils._c_const as _c_const
 import torch
 from typing import Callable, Tuple, Mapping
+from utils import plotter
 
 def l1_regulazation_loss(scale, parameters):
         return scale * sum(torch.sum(torch.abs(wj)) for wj in parameters)
@@ -59,6 +60,10 @@ class __C_Module__():
         pass
 
     def from_linked_config(self, config):
+        pass
+
+    "Activates debug mode -> i.e registers hooks for activations & gradients"
+    def debug_mode(self):
         pass
 
 class __C_BlockBuilder__():
@@ -129,6 +134,7 @@ class __C_VariatonalEncoder__(nn.Module, __C_Module__):
         self._filters = filters
         self._downsampling_strat = downsampling
         self._x_feature_map_strat = x_feature_map
+        self._built = False
         
         if latent_repr == 'log_var':
             self._latent_fnct = latent_log_variance
@@ -139,7 +145,16 @@ class __C_VariatonalEncoder__(nn.Module, __C_Module__):
         else:
             raise Exception("No valid latent representation!")
 
+    @property
+    def built(self):
+        return self._built
+    
+    @built.setter
+    def built(self, status:bool):
+        self._built = status
+
     def forward(self, x):
+        self.built = True
         latent_v_mu, latent_repr = self._sub_modules["encoder"](x)
         
         x = self.latent_repr(latent_v_mu, latent_repr)
@@ -167,15 +182,36 @@ class __C_VariatonalEncoder__(nn.Module, __C_Module__):
     # gamma : scale regulazation loss
     # loss_regulizer : regulazation function to use
     def c_train(self, x, /, epoch, *, alpha=1, beta=1, gamma=1, 
-                loss_regulizer:Callable[[float, Iterator[nn.Parameter]], None]=l1_regulazation_loss):
-        self.train(True)
+                loss_regulizer:Callable[[float, Iterator[nn.Parameter]], None]=l1_regulazation_loss,
+                debug_mode: str | int | bool=False, debug_start:int=1):
+        _debug_modes = ["batch", "epoch"]
+        if isinstance(debug_mode, int) and 0 > debug_mode >= len(_debug_modes):
+            raise ValueError()
+        elif isinstance(debug_mode, int):
+            debug_mode = _debug_modes[debug_mode]
+
+        if isinstance(debug_mode, str) and debug_mode not in _debug_modes:
+            raise ValueError()
+        if isinstance(debug_mode, bool) and debug_mode == True:
+            debug_mode = _debug_modes[0]
+        
+        if debug_mode:
+            activations, gradients = self._register_hookups()
+
+        self.train()
         for ep in range(epoch):
             _total_loss = 0
             for _batch in x:
                 _batch = _batch.to(self._device)
                 _total_loss += self.c_train_step(_batch, alpha=alpha, beta=beta,
                                                  gamma=gamma, loss_regulizer=loss_regulizer)
-
+                if debug_mode and debug_mode == _debug_modes[0] and debug_start <= ep + 1:
+                    plotter.visualize_data(activations, "Activation")
+                    plotter.visualize_data(gradients, "Gradient")
+            if debug_mode and debug_mode == _debug_modes[1] and debug_start <= ep + 1:
+                plotter.visualize_data(activations, "Activation")
+                plotter.visualize_data(gradients, "Gradient")
+            
             print(f"Loss for ep={ep+1} => {_total_loss / len(x):.2f}")
 
     def latent_repr(self, latent_v_mu, latent_v_repr):
@@ -297,13 +333,13 @@ class __C_VariatonalEncoder__(nn.Module, __C_Module__):
         f("\t---------")
         self._iterate_over_info(_info_dec, info_call=info_func_arch)
 
-
     def summary(self, f:Callable[[str], None]):
         _encoder = self._sub_modules["encoder"]
         _decoder = self._sub_modules["decoder"]
 
-        x = torch.randn([1, *self._input_dim]) 
-        self(x)
+        if not self.built:
+            x = torch.randn([1, *self._input_dim]) 
+            self(x)
         
         _info_enc, _info_dec = self._module_call(_encoder, _decoder)
 
@@ -372,6 +408,33 @@ class __C_VariatonalEncoder__(nn.Module, __C_Module__):
         
         self.c_link(_optimizer, _device)
 
+    def _register_hookups(self) -> Tuple[Mapping[str, torch.Tensor], Mapping[str, torch.Tensor]]:
+        activations = dict()
+        gradients   = dict()
+
+        def register_activation(name):
+            def hook(module, args, output):
+                activations[name] = output.detach()
+            return hook
+
+        def register_gradient(name):
+            def hook(_, grad_input, grad_output):
+                name_i = name + "wrt in"
+                name_j = name + "wrt out"
+                if grad_input[0] != None:
+                    gradients[name_i] = grad_input[0].detach() # passing w & b seperatly
+                gradients[name_j] = grad_output[0].detach() # passing w & b seperatly
+            return hook
+        
+        for name, module in self.named_modules():
+            if hasattr(module, "weight") and module.get_parameter("weight").requires_grad or \
+               hasattr(module, "bias") and module.get_parameter("bias").requires_grad:
+                module.register_full_backward_hook(register_gradient(name))
+            if isinstance(module, (nn.ReLU, nn.LeakyReLU, nn.Tanh, nn.Sigmoid)):
+                module.register_forward_hook(register_activation(name))
+
+        return activations, gradients
+
 class __C_Encoder__(nn.Module, __C_Module__):
     def __init__(self, input_dim, latent_dim, depth, blocks, filter,
                     kernel, downsampling:Strategy, x_feature_map:Strategy):
@@ -439,7 +502,7 @@ class __C_Encoder__(nn.Module, __C_Module__):
         _x_s = self._flatten_module_list[-1](x)
         __C_Decoder__._pooling_indices = list(reversed(_indices))
         return (_x_f, _x_s)
-
+    
 class __C_Decoder__(nn.Module, __C_Module__):
     def __init__(self, enc_module_list, filter, spatial):
         super().__init__()
