@@ -10,6 +10,7 @@ import numpy as np
 from utils import utilty
 from sklearn.decomposition import PCA
 from utils import plotter
+import utils.image as image
 
 _c_data = __C_Data__("../data/cell_data.h5", 'r')
 
@@ -57,7 +58,7 @@ def task_1():
 ##########################
 
 _test_idx = 3
-tilesize = 128
+tilesize = 156
 
 max, min, std, mean = _c_data.global_explore([_test_idx])
 max_t, min_t, std_t, mean_t = _c_data.global_explore(
@@ -70,11 +71,14 @@ _train = _c_data.extract([_test_idx])
 _test  = _c_data.extract([x for x in range(len(_c_data)) if x != _test_idx])
 
 _dataset = __C_DataSet__(_train, (mean, std))
+#_d1 = _dataset.map(image.sharper)
+#_dataset = _dataset.concat(_d1)
+_dataset = _dataset.augment_seq([image.flip, image.sharper])
 _datasampler = __C_DataSampler__(_c_const._c_strat_skip, _dataset, tilesize, 1000)
-_dataloader  = __C_DataLoader__(_dataset, _datasampler, 64)
+_dataloader  = __C_DataLoader__(_dataset, _datasampler, 16)
 _n_e = next(iter(_dataloader))
 
-plotter.plot2D(_n_e, rows=2, cols=5, shape=(tilesize, tilesize, 1))
+plotter.plot2D(_n_e, rows=2, cols=4, shape=(tilesize, tilesize, 1))
 
 x = torch.cuda.is_available()
 z = torch.cuda.device_count()
@@ -86,8 +90,8 @@ _type   = _device.type
 
 print(f"Device selected => {_type}")
 
-vae = __C_VariatonalEncoder__((1, tilesize, tilesize), 128, 3, 3, 4, 32,
-                        _c_const._c_strat_max_pooling, _c_const._c_strat_l_relu)
+vae = __C_VariatonalEncoder__((1, tilesize, tilesize), 156, 2, 4, 4, 64,
+                        _c_const._c_strat_max_pooling, _c_const._c_strat_relu)
 
 def print_function(line):
     print(line)
@@ -96,25 +100,23 @@ vae.architecture(print_function)
 vae.summary(print_function)
 vae = vae.to(_device)
 
-vae.c_link(opt.SGD(vae.parameters(), 1e-3), _device)
+vae.c_link(opt.Adam(vae.parameters(), 1e-4), _device)
 vae.downstream_link(None, _device)
 
-vae.c_train(_dataloader, 50, alpha=0.95, beta=4, gamma=1e-7,
-            loss_regulizer=l1_regulazation_loss)
+vae.c_train(_dataloader, 50, alpha=0.2, beta=4, gamma=1e-6,
+            loss_regulizer=l2_regulazation_loss) # debug_mode="epoch", debug_start=10)
 
 _n_e = next(iter(_dataloader))
 
-print("Recreating images")
-
 latent_v_mu, latent_v_std, x_prime = vae.c_inference(_n_e)
 
-plotter.plot2D(x_prime, rows=2, cols=4, shape=(tilesize, tilesize, 1))
-
-print("Sampling from model")
+plotter.plot2D(x_prime, rows=2, cols=4, shape=(tilesize, tilesize, 1),
+               title="Recreating images")
 
 x_prime = vae.c_decode(10)
 
-plotter.plot2D(x_prime, rows=2, cols=4, shape=(tilesize, tilesize, 1))
+plotter.plot2D(x_prime, rows=2, cols=4, shape=(tilesize, tilesize, 1),
+               title="Sampling from model")
 
 _src_dir = os.path.dirname(__file__)
 _tgt_dir = os.path.join(_src_dir, "..", "model", "saved_model.pt")
@@ -132,7 +134,7 @@ _reconstructed_model.from_linked_config(_config)
 _reconstructed_model.eval()
 
 _dataset = __C_DataSet__(_test, (mean_t, std_t))
-_datasampler = __C_DataSampler__(_c_const._c_strat_skip, _dataset, tilesize, 3000)
+_datasampler = __C_DataSampler__(_c_const._c_strat_skip, _dataset, tilesize, 1000)
 _dataloader  = __C_DataLoader__(_dataset, _datasampler, 8)
 
 _reg_1 = _dataset[(0, 10, 50, 10, tilesize)]
@@ -170,8 +172,10 @@ _latent_repr_interpolated_sec = torch.squeeze(_latent_repr_interpolated_sec)
 _interpolated_images_reg = vae.c_decode_from_latent(_latent_repr_interpolated_reg)
 _interpolated_images_sec = vae.c_decode_from_latent(_latent_repr_interpolated_sec)
 
-plotter.plot2D(_interpolated_images_reg, rows=2, cols=5, shape=(tilesize, tilesize, 1))
-plotter.plot2D(_interpolated_images_sec, rows=2, cols=5, shape=(tilesize, tilesize, 1))
+plotter.plot2D(_interpolated_images_reg, rows=2, cols=5, shape=(tilesize, tilesize, 1)
+               , title="interpolation1")
+plotter.plot2D(_interpolated_images_sec, rows=2, cols=5, shape=(tilesize, tilesize, 1),
+               title="interpolation2")
 
 _latent_representations = []
 
