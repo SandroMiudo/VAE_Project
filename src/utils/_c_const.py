@@ -1,4 +1,5 @@
 import utils._c_types as _c_types
+from torch import nn
 
 _c_strat_pad : _c_types.Strategy = 'pad'
 _c_strat_skip : _c_types.Strategy = 'skip'
@@ -14,3 +15,5 @@ _c_strat_tanh    = 'tanh_feature_map'
 _c_32_t = 0xFFFFFFFF
 _c_16_t = 0xFFFF
 _c_8_t  = 0xFF
+
+_c_activations = (nn.ReLU, nn.LeakyReLU, nn.Sigmoid, nn.Tanh)
