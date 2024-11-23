@@ -58,7 +58,7 @@ def task_1():
 ##########################
 
 _test_idx = 3
-tilesize = 156
+tilesize = 164
 
 max, min, std, mean = _c_data.global_explore([_test_idx])
 max_t, min_t, std_t, mean_t = _c_data.global_explore(
@@ -69,13 +69,16 @@ print(f"maximum => {max} , minimum => {min}\nmean => {mean:.2f} , std => {std:.2
 #_train = _c_data.reduce(20, [_test_idx])
 _train = _c_data.extract([_test_idx])
 _test  = _c_data.extract([x for x in range(len(_c_data)) if x != _test_idx])
+#_test = _c_data.reduce(20, [x for x in range(len(_c_data)) if x != _test_idx])
 
 _dataset = __C_DataSet__(_train, (mean, std))
 #_d1 = _dataset.map(image.sharper)
 #_dataset = _dataset.concat(_d1)
-_dataset = _dataset.augment_seq([image.flip, image.sharper])
+_dataset = _dataset.augment_seq([image.flip, image.contrast, 
+                                 image.border_crop_and_resize], 
+                                 border=3, contrast_factor=1.2)
 _datasampler = __C_DataSampler__(_c_const._c_strat_skip, _dataset, tilesize, 1000)
-_dataloader  = __C_DataLoader__(_dataset, _datasampler, 16)
+_dataloader  = __C_DataLoader__(_dataset, _datasampler, 8)
 _n_e = next(iter(_dataloader))
 
 plotter.plot2D(_n_e, rows=2, cols=4, shape=(tilesize, tilesize, 1))
@@ -90,7 +93,7 @@ _type   = _device.type
 
 print(f"Device selected => {_type}")
 
-vae = __C_VariatonalEncoder__((1, tilesize, tilesize), 156, 2, 4, 4, 64,
+vae = __C_VariatonalEncoder__((1, tilesize, tilesize), 64, 2, 3, 3, 64,
                         _c_const._c_strat_max_pooling, _c_const._c_strat_relu)
 
 def print_function(line):
@@ -103,8 +106,8 @@ vae = vae.to(_device)
 vae.c_link(opt.Adam(vae.parameters(), 1e-4), _device)
 vae.downstream_link(None, _device)
 
-vae.c_train(_dataloader, 50, alpha=0.2, beta=4, gamma=1e-6,
-            loss_regulizer=l2_regulazation_loss) # debug_mode="epoch", debug_start=10)
+vae.c_train(_dataloader, 30, alpha=0.6, beta=4, gamma=1e-5,
+            loss_regulizer=l1_regulazation_loss) # debug_mode="epoch", debug_start=10)
 
 _n_e = next(iter(_dataloader))
 
