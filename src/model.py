@@ -21,13 +21,16 @@ def latent_log_variance(latent_v_mu, latent_log_var):
 def latent_std(latent_v_mu, latent_std):
     return latent_v_mu + (latent_std * torch.randn_like(latent_std))
 
+# formula KL(y,y*) = 1/2 * (sigmaO**2 / sigma1**2 + ((mu1 - mu0) ** 2 / sigma1**2) - 1 + log2(sigma1**2/sigma0**2))
+# variants => avg over L_KL or sum over L_KL
+
 def latent_loss_log_variance(latent_v_mu, latent_log_var):
-    return 0.5 * torch.sum(torch.square(latent_v_mu) +
-            torch.exp(latent_log_var) - latent_log_var - 1, 1)
+    return (1 / latent_v_mu.shape[1]) * torch.sum(0.5 * (torch.exp(latent_log_var) + torch.square(latent_v_mu) - 1 \
+           - latent_log_var), 1)
 
 def latent_loss_std(latent_v_mu, latent_std):
-    return 0.5 * torch.sum(torch.square(latent_v_mu) + 
-            torch.square(latent_std) - torch.log(torch.square(latent_std)) - 1,1)
+    return (1 / latent_v_mu.shape[1]) * torch.sum(0.5 * (torch.square(latent_std) + torch.square(latent_v_mu) - 1 \
+           - torch.log(torch.square(latent_std))), 1)
 
 class __C_Module__():
     
