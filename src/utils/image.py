@@ -4,8 +4,8 @@ from ._c_types import NdArrayLike
 import numpy as np
 import random
 
-BRIGTHNESS_UP_FACTOR = 1.5
-BRIGTHNESS_DOWN_FACTOR = 0.75
+BRIGHTNESS_UP_FACTOR = 1.5
+BRIGHTNESS_DOWN_FACTOR = 0.75
 
 def create(a:NdArrayLike, /) -> img:
     return Image.fromarray(a)
@@ -13,40 +13,38 @@ def create(a:NdArrayLike, /) -> img:
 def to_numpy(a:img, /) -> NdArrayLike:
     return np.array(a)
 
-def border_crop(a:NdArrayLike, /, **kw) -> img:
-    assert "border" in kw
-    _border = kw["border"]
-    _img    = create(a)
-    return ImageOps.crop(_img, _border)
-
-def general_crop(a:NdArrayLike, /, **kw) -> img:
+def crop(a:NdArrayLike, /, **kw) -> img:
     assert "box" in kw
+
     _box = kw["box"]
     _img = create(a)
     return _img.crop(_box)
 
-def random_crop(a:NdArrayLike, /, **kw) -> img:
-    assert "box_shape" in kw
-    assert "min_size" in kw
+def border_crop_and_resize(a:NdArrayLike, /, **kw) -> img:
+    assert "border" in kw
 
-    _box_left  = random.randint(kw["box_shape"][0], kw["box_shape"][2]-kw["min_size"])
-    _box_upper = random.randint(kw["box_shape"][1], kw["box_shape"][3]-kw["min_size"])
-    _box_right = random.randint(_box_left,  kw["box_shape"][2])
-    _box_lower = random.randint(_box_upper, kw["box_shape"][3])
+    height = a.shape[0]
+    width  = a.shape[1]
 
-    return general_crop(a, box=(_box_left, _box_upper, _box_right, _box_lower))
+    _border = kw["border"]
+    _img    = create(a)
+    return to_numpy(ImageOps.crop(_img, _border).resize((width, height)))
 
 def crop_and_resize(a:NdArrayLike, /, **kw) -> NdArrayLike:
     height = a.shape[0]
     width  = a.shape[1]
     
-    _img = general_crop(a, kw)
+    _img = crop(a, kw)
     return to_numpy(_img.resize((width, height)))
 
-def rotate(a:NdArrayLike, /, **kw):
+def rotate(a:NdArrayLike, /, **kw): # does not behave like intended !
     assert "theta" in kw
     _img = create(a)
-    return to_numpy(_img.rotate(kw["theta"]))
+    return to_numpy(_img.rotate(kw["theta"], expand=True))
+
+def random_rotate(a:NdArrayLike, /, **_):
+    _theta = random.random() * 360.0
+    return rotate(a, theta=_theta)
 
 def transpose(a:NdArrayLike, /, **_):
     _img = create(a)
@@ -71,12 +69,12 @@ def smoother(a:NdArrayLike, /, **_):
 def lighter(a:NdArrayLike, /, **_):
     _img = create(a)
     enhancer = ImageEnhance.Brightness(_img)
-    return to_numpy(enhancer.enhance(BRIGTHNESS_UP_FACTOR))
+    return to_numpy(enhancer.enhance(BRIGHTNESS_UP_FACTOR))
 
 def darker(a:NdArrayLike, /, **_):
     _img = create(a)
     enhancer = ImageEnhance.Brightness(_img)
-    return to_numpy(enhancer.enhance(BRIGTHNESS_DOWN_FACTOR))
+    return to_numpy(enhancer.enhance(BRIGHTNESS_DOWN_FACTOR))
 
 def contrast(a:NdArrayLike, /, **kw):
     assert "contrast_factor" in kw
