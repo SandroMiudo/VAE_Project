@@ -9,7 +9,7 @@ from typing import Callable, Tuple, Mapping
 from utils import plotter
 
 def l1_regulazation_loss(scale, parameters):
-        return scale * sum(torch.sum(torch.abs(wj)) for wj in parameters)
+    return scale * sum(torch.sum(torch.abs(wj)) for wj in parameters)
 
 def l2_regulazation_loss(scale, parameters):
     return scale * sum(torch.sum(torch.square(wj)) for wj in parameters)
@@ -25,11 +25,11 @@ def latent_std(latent_v_mu, latent_std):
 # variants => avg over L_KL or sum over L_KL
 
 def latent_loss_log_variance(latent_v_mu, latent_log_var):
-    return (1 / latent_v_mu.shape[1]) * torch.sum(0.5 * (torch.exp(latent_log_var) + torch.square(latent_v_mu) - 1 \
+    return torch.sum(0.5 * (torch.exp(latent_log_var) + torch.square(latent_v_mu) - 1 \
            - latent_log_var), 1)
 
 def latent_loss_std(latent_v_mu, latent_std):
-    return (1 / latent_v_mu.shape[1]) * torch.sum(0.5 * (torch.square(latent_std) + torch.square(latent_v_mu) - 1 \
+    return torch.sum(0.5 * (torch.square(latent_std) + torch.square(latent_v_mu) - 1 \
            - torch.log(torch.square(latent_std))), 1)
 
 class __C_Module__():
@@ -445,19 +445,21 @@ class __C_Encoder__(nn.Module, __C_Module__):
         _filter   = filter
         
         _layers = []
-        _down_sampling_spatial = [] # needed to reconstruct input
 
         for _ in range(depth):
             _block = __C_BlockBuilder__(blocks, _channels, _filter, kernel,
                             x_feature_map)
             _layers.append(_block.fetch())
             _spatial = _block.out_shape(_spatial)
-            _down_sampling_spatial.append(_spatial)
+            if _spatial[0] % 2 != 0:
+                _layers.append(__C_BlockBuilder__(1, _filter, _filter, 
+                                                  2, x_feature_map).fetch())
+                _spatial = (_spatial[0]-1, _spatial[1]-1)
             match downsampling:
                 case _c_const._c_strat_avg_pooling:
                     _pool = nn.AvgPool2d((2,2))
                 case _c_const._c_strat_max_pooling:
-                    _pool = nn.MaxPool2d((2,2), return_indices=True)
+                    _pool = nn.MaxPool2d((2,2))
                 case _:
                     pass
             _layers.append(nn.ModuleList([_pool]))
@@ -471,17 +473,13 @@ class __C_Encoder__(nn.Module, __C_Module__):
         self._state_shape = (_channels, *_spatial)
 
         self._flatten_module_list.append(nn.Flatten())
+        #self._flatten_module_list.append(
+        #    nn.Linear((_spatial[0]*_spatial[1]*_channels), latent_dim*2))
+        # self._flatten_module_list.append(nn.LeakyReLU())
         self._flatten_module_list.append(
-            nn.Linear((_spatial[0]*_spatial[1]*_channels), latent_dim*2))
-        self._flatten_module_list.append(nn.LeakyReLU())
+            nn.Linear((_spatial[0]*_spatial[1]*_channels), latent_dim))
         self._flatten_module_list.append(
-            nn.Linear(latent_dim*2, latent_dim))
-        # self._flatten_module_list.append(nn.ReLU())
-        self._flatten_module_list.append(
-            nn.Linear(latent_dim*2, latent_dim))
-        #self._flatten_module_list.append(nn.ReLU())
-
-        __C_Decoder__._down_sampling_spatial = list(reversed(_down_sampling_spatial))
+            nn.Linear((_spatial[0]*_spatial[1]*_channels), latent_dim))
 
     def modules(self) -> Iterator[nn.Module]:
         return self._flatten_module_list
@@ -491,16 +489,10 @@ class __C_Encoder__(nn.Module, __C_Module__):
         return self._state_shape
 
     def forward(self, x):
-        _indices = []
         for i in range(len(self._flatten_module_list)-2):
-            if isinstance(self._flatten_module_list[i], nn.MaxPool2d):
-                x, indices = self._flatten_module_list[i](x)
-                _indices.append(indices)
-            else:
-                x = self._flatten_module_list[i](x)
+            x = self._flatten_module_list[i](x)
         _x_f = self._flatten_module_list[-2](x)
         _x_s = self._flatten_module_list[-1](x)
-        __C_Decoder__._pooling_indices = list(reversed(_indices))
         return (_x_f, _x_s)
     
 class __C_Decoder__(nn.Module, __C_Module__):
@@ -521,9 +513,7 @@ class __C_Decoder__(nn.Module, __C_Module__):
                     nn.Unflatten(1, (_channels, spatial[0], spatial[1])))
             elif isinstance(_mod, (nn.AvgPool2d, nn.MaxPool2d)):
                 self._module_list.append(
-                    nn.MaxUnpool2d((2,2)))
-                #self._module_list.append(
-                #    nn.ConvTranspose2d(_channels, _channels, (2,2), (2,2)))
+                    nn.ConvTranspose2d(_channels, _channels, (2,2), (2,2)))
                 _channels //= 2
             elif isinstance(_mod, nn.Conv2d):
                 self._module_list.append(
@@ -559,12 +549,6 @@ class __C_Decoder__(nn.Module, __C_Module__):
         return _mod_actv
 
     def forward(self, x):
-        _c = 0
         for i in range(len(self._module_list)):
-            if isinstance(self._module_list[i], nn.MaxUnpool2d):
-                x = self._module_list[i](x, __C_Decoder__._pooling_indices[_c],
-                                         __C_Decoder__._down_sampling_spatial[_c])
-                _c += 1
-            else:
-                x = self._module_list[i](x)
+            x = self._module_list[i](x)
         return x
