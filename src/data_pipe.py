@@ -297,7 +297,9 @@ class __C_DataSampler__(Sampler):
         return self._samples
 
 class __C_DataLoader__(DataLoader):
+    batch_size = 0
     def __init__(self, dataset, sampler, batch_size, worker_fnct:Callable[[int], None]=None):
+        __C_DataLoader__.batch_size = batch_size
         cpu_physical = util.cpu_count()
         cpu_logical  = util.cpu_count_logical()
         print(f"Cpu physical => {cpu_physical}")

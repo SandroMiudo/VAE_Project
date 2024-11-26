@@ -7,6 +7,7 @@ import utils._c_const as _c_const
 import torch
 from typing import Callable, Tuple, Mapping
 from utils import plotter
+from data_pipe import __C_DataLoader__
 
 def l1_regulazation_loss(scale, parameters):
     return scale * sum(torch.sum(torch.abs(wj)) for wj in parameters)
@@ -25,11 +26,11 @@ def latent_std(latent_v_mu, latent_std):
 # variants => avg over L_KL or sum over L_KL
 
 def latent_loss_log_variance(latent_v_mu, latent_log_var):
-    return torch.sum(0.5 * (torch.exp(latent_log_var) + torch.square(latent_v_mu) - 1 \
+    return 0.5 *torch.sum((torch.exp(latent_log_var) + torch.square(latent_v_mu) - 1 \
            - latent_log_var), 1)
 
 def latent_loss_std(latent_v_mu, latent_std):
-    return torch.sum(0.5 * (torch.square(latent_std) + torch.square(latent_v_mu) - 1 \
+    return 0.5 * torch.sum((torch.square(latent_std) + torch.square(latent_v_mu) - 1 \
            - torch.log(torch.square(latent_std))), 1)
 
 class __C_Module__():
@@ -76,11 +77,11 @@ class __C_BlockBuilder__():
         self._blocks = nn.ModuleList()
         for i in range(blocks):
             if i == 0:
-                _conv_i = nn.Conv2d(input_dim, filter, (kernel,kernel), (1,1), 
-                                padding='valid')
+                _conv_i = nn.Conv2d(input_dim, filter, (3,3), (1,1), 
+                                padding=(1,1))
             else:
-                _conv_i = nn.Conv2d(filter, filter, (kernel,kernel), (1,1), 
-                                padding='valid')
+                _conv_i = nn.Conv2d(filter, filter, (3,3), (1,1), 
+                                padding=(1,1))
             self._blocks.append(_conv_i)
             self._blocks.append(nn.BatchNorm2d(filter))
 
@@ -117,20 +118,21 @@ class __C_BlockBuilder__():
         return self._blocks[idx]
 
 class __C_VariatonalEncoder__(nn.Module, __C_Module__):
-    def __init__(self, input_dim, latent_dim, blocks, depth, kernel, filters,
+    def __init__(self, input_dim, hidden_size, latent_dim, blocks, depth, kernel, filters,
                  downsampling:Strategy, x_feature_map:Strategy, *,
                  latent_repr:str='log_var'):
         assert blocks > 0 and depth > 0
         super().__init__()
-        _c_encoder =__C_Encoder__(input_dim, latent_dim,
-                                      depth, blocks, filters, kernel,
-                                      downsampling, x_feature_map)
+        _c_encoder =__C_Encoder__(hidden_size, input_dim, latent_dim,
+                                depth, blocks, filters, kernel,
+                                downsampling, x_feature_map)
         self._sub_modules = nn.ModuleDict({
             'encoder' : _c_encoder,
             'decoder' : __C_Decoder__(_c_encoder.modules(), 
                                       _c_encoder.state_shape[0], _c_encoder.state_shape[1:])
         })
         self._latent_dim = latent_dim
+        self._hidden_size = hidden_size
         self._input_dim  = input_dim
         self._blocks = blocks
         self._depth = depth
@@ -139,6 +141,7 @@ class __C_VariatonalEncoder__(nn.Module, __C_Module__):
         self._downsampling_strat = downsampling
         self._x_feature_map_strat = x_feature_map
         self._built = False
+        self._saved_skip_connections = []
         
         if latent_repr == 'log_var':
             self._latent_fnct = latent_log_variance
@@ -157,18 +160,22 @@ class __C_VariatonalEncoder__(nn.Module, __C_Module__):
     def built(self, status:bool):
         self._built = status
 
-    def forward(self, x):
+    def forward(self, x, save_skip_connections=False):
         self.built = True
-        latent_v_mu, latent_repr = self._sub_modules["encoder"](x)
+        latent_v_mu, latent_repr, skip_connections = self._sub_modules["encoder"](x)
         
+        if save_skip_connections:
+            self._saved_skip_connections.append(skip_connections)
+
         x = self.latent_repr(latent_v_mu, latent_repr)
 
-        return (latent_v_mu, latent_repr, self._sub_modules["decoder"](x))
+        return (latent_v_mu, latent_repr, self._sub_modules["decoder"](x, skip_connections))
 
     def c_train_step(self, x, /, *, alpha, beta, gamma,
-                     loss_regulizer:Callable[[float, Iterator[nn.Parameter]], float]):
+                     loss_regulizer:Callable[[float, Iterator[nn.Parameter]], float],
+                     save_skip_connections=False):
         self._optimizer.zero_grad()
-        latent_v_mu, latent_v_std, x_prime = self(x)
+        latent_v_mu, latent_v_std, x_prime = self(x, save_skip_connections)
 
         _loss:torch.Tensor = self.loss(x, latent_v_mu, latent_v_std, x_prime,
                                        alpha, beta, gamma, loss_regulizer)
@@ -201,10 +208,12 @@ class __C_VariatonalEncoder__(nn.Module, __C_Module__):
         self.train()
         for ep in range(epoch):
             _total_loss = 0
+            _save_skip_connections = True if ep == epoch-1 else False
             for _batch in x:
                 _batch = _batch.to(self._device)
                 _total_loss += self.c_train_step(_batch, alpha=alpha, beta=beta,
-                                                 gamma=gamma, loss_regulizer=loss_regulizer)
+                                                 gamma=gamma, loss_regulizer=loss_regulizer,
+                                                 save_skip_connections=_save_skip_connections)
                 if debug_mode and debug_mode == _debug_modes[0] and debug_start <= ep + 1:
                     plotter.visualize_data(activations, "Activation")
                     plotter.visualize_data(gradients, "Gradient")
@@ -213,6 +222,7 @@ class __C_VariatonalEncoder__(nn.Module, __C_Module__):
                 plotter.visualize_data(gradients, "Gradient")
             
             print(f"Loss for ep={ep+1} => {_total_loss / len(x):.2f}")
+        self._sub_modules["decoder"].transfer_weights()
 
     def latent_repr(self, latent_v_mu, latent_v_repr):
         return self._latent_fnct(latent_v_mu, latent_v_repr)
@@ -233,7 +243,7 @@ class __C_VariatonalEncoder__(nn.Module, __C_Module__):
         x = x.to(self._device)
 
         with torch.no_grad():
-            latent_v_mu, latent_v_std = self._sub_modules["encoder"](x)
+            latent_v_mu, latent_v_std, _ = self._sub_modules["encoder"](x)
 
         return (latent_v_mu.to("cpu"), latent_v_std.to("cpu"))
 
@@ -241,28 +251,22 @@ class __C_VariatonalEncoder__(nn.Module, __C_Module__):
         self.eval()
 
         _rands = torch.randn((samples, self._latent_dim))
-        _rands_i = torch.randn((samples, *self._input_dim))
-
         _rands = _rands.to(self._device)
-        _rands_i = _rands_i.to(self._device)
 
         with torch.no_grad():
-                self._sub_modules["encoder"](_rands_i) # update pooling indices
-                x_prime = self._sub_modules["decoder"](_rands)
+            x_prime = self._sub_modules["decoder"](_rands, 
+                util.sample_uniform(self._saved_skip_connections))
 
         return x_prime.to("cpu")
     
     def c_decode_from_latent(self, latent_reprs:torch.Tensor):
         self.eval()
 
-        _rands_i = torch.randn((latent_reprs.shape[0], *self._input_dim))
-
-        _rands_i = _rands_i.to(self._device)
         _latent_reprs = latent_reprs.to(self._device)
 
         with torch.no_grad():
-            self._sub_modules["encoder"](_rands_i) # update pooling indices
-            x_prime = self._sub_modules["decoder"](_latent_reprs)
+            x_prime = self._sub_modules["decoder"](_latent_reprs,
+                util.sample_uniform(self._saved_skip_connections))
 
         return x_prime.to("cpu")
 
@@ -338,7 +342,7 @@ class __C_VariatonalEncoder__(nn.Module, __C_Module__):
         _decoder = self._sub_modules["decoder"]
 
         if not self.built:
-            x = torch.randn([1, *self._input_dim]) 
+            x = torch.randn([__C_DataLoader__.batch_size, *self._input_dim])
             self(x)
         
         _info_enc, _info_dec = self._module_call(_encoder, _decoder)
@@ -365,6 +369,7 @@ class __C_VariatonalEncoder__(nn.Module, __C_Module__):
     def get_config(self):
         return {
             "input_dim" : self._input_dim,
+            "hidden_size" : self._hidden_size,
             "latent_dim" : self._latent_dim,
             "blocks" : self._blocks,
             "depth" : self._depth,
@@ -379,6 +384,7 @@ class __C_VariatonalEncoder__(nn.Module, __C_Module__):
     @classmethod
     def from_config(cls, config):
         _input_dim = config.pop("input_dim")
+        _hidden_size = config.pop("hidden_size")
         _latent_dim = config.pop("latent_dim")
         _blocks = config.pop("blocks")
         _depth = config.pop("depth")
@@ -388,7 +394,7 @@ class __C_VariatonalEncoder__(nn.Module, __C_Module__):
         _x_feature_map_strat = config.pop("x_feature_map")
         _latent_repr = config.pop("latent_repr")
 
-        return cls(_input_dim, _latent_dim, _blocks, _depth, _kernel,
+        return cls(_input_dim, _hidden_size, _latent_dim, _blocks, _depth, _kernel,
                    _filters, _downsampling_strat, _x_feature_map_strat,
                    latent_repr=_latent_repr)
     
@@ -436,7 +442,7 @@ class __C_VariatonalEncoder__(nn.Module, __C_Module__):
         return activations, gradients
 
 class __C_Encoder__(nn.Module, __C_Module__):
-    def __init__(self, input_dim, latent_dim, depth, blocks, filter,
+    def __init__(self, hidden_size, input_dim, latent_dim, depth, blocks, filter,
                     kernel, downsampling:Strategy, x_feature_map:Strategy):
         super().__init__()
 
@@ -445,26 +451,30 @@ class __C_Encoder__(nn.Module, __C_Module__):
         _filter   = filter
         
         _layers = []
+        #_down_sampling_spatial = [] # needed to reconstruct input
 
-        for _ in range(depth):
+        for i in range(depth):
             _block = __C_BlockBuilder__(blocks, _channels, _filter, kernel,
                             x_feature_map)
             _layers.append(_block.fetch())
-            _spatial = _block.out_shape(_spatial)
-            if _spatial[0] % 2 != 0:
+            # _spatial = _block.out_shape(_spatial)
+            """if _spatial[0] % 2 != 0:
                 _layers.append(__C_BlockBuilder__(1, _filter, _filter, 
                                                   2, x_feature_map).fetch())
-                _spatial = (_spatial[0]-1, _spatial[1]-1)
+                _spatial = (_spatial[0]-1, _spatial[1]-1)"""
+            #_down_sampling_spatial.append(_spatial)
             match downsampling:
                 case _c_const._c_strat_avg_pooling:
                     _pool = nn.AvgPool2d((2,2))
                 case _c_const._c_strat_max_pooling:
                     _pool = nn.MaxPool2d((2,2))
+                    #_pool = nn.MaxPool2d((2,2), return_indices=True)
                 case _:
                     pass
             _layers.append(nn.ModuleList([_pool]))
-            _spatial = (((_spatial[0] - _pool.kernel_size[0]) // _pool.stride[0]) + 1,
-                        ((_spatial[1] - _pool.kernel_size[1]) // _pool.stride[1]) + 1)
+            _spatial = (_spatial[0] // 2, _spatial[1] // 2)
+            """_spatial = (((_spatial[0] - _pool.kernel_size[0]) // _pool.stride[0]) + 1,
+                        ((_spatial[1] - _pool.kernel_size[1]) // _pool.stride[1]) + 1)"""
             _channels = _filter
             _filter *= 2
 
@@ -472,14 +482,21 @@ class __C_Encoder__(nn.Module, __C_Module__):
         
         self._state_shape = (_channels, *_spatial)
 
+        #self._flatten_module_list.append(nn.AdaptiveAvgPool2d((1,1)))
+
         self._flatten_module_list.append(nn.Flatten())
-        #self._flatten_module_list.append(
-        #    nn.Linear((_spatial[0]*_spatial[1]*_channels), latent_dim*2))
-        # self._flatten_module_list.append(nn.LeakyReLU())
         self._flatten_module_list.append(
-            nn.Linear((_spatial[0]*_spatial[1]*_channels), latent_dim))
+            nn.Linear((_spatial[0]*_spatial[1]*_channels), hidden_size))
+        self._flatten_module_list.append(nn.LeakyReLU())
         self._flatten_module_list.append(
-            nn.Linear((_spatial[0]*_spatial[1]*_channels), latent_dim))
+            nn.Linear(hidden_size, latent_dim))
+        self._flatten_module_list.append(
+            nn.Linear(hidden_size, latent_dim))
+        """self._flatten_module_list.append(
+            nn.Linear(_channels, latent_dim))
+        self._flatten_module_list.append(
+            nn.Linear(_channels, latent_dim)) """
+        #__C_Decoder__._down_sampling_spatial = list(reversed(_down_sampling_spatial))
 
     def modules(self) -> Iterator[nn.Module]:
         return self._flatten_module_list
@@ -488,19 +505,42 @@ class __C_Encoder__(nn.Module, __C_Module__):
     def state_shape(self):
         return self._state_shape
 
-    def forward(self, x):
+    """def forward(self, x):
         for i in range(len(self._flatten_module_list)-2):
             x = self._flatten_module_list[i](x)
+
+        # x = torch.squeeze(x)      
         _x_f = self._flatten_module_list[-2](x)
         _x_s = self._flatten_module_list[-1](x)
-        return (_x_f, _x_s)
+        return (_x_f, _x_s)"""
+
+    def forward(self, x):
+        #_indices = []
+        _skip_connections = []
+        for i in range(len(self._flatten_module_list)-2):
+            """if isinstance(self._flatten_module_list[i], nn.MaxPool2d):
+                x, indices = self._flatten_module_list[i](x)
+                _indices.append(indices)
+            else:"""
+            if isinstance(self._flatten_module_list[i], nn.MaxPool2d):
+                _skip_connections.append(x)
+            x = self._flatten_module_list[i](x)
+
+        _x_f = self._flatten_module_list[-2](x)
+        _x_s = self._flatten_module_list[-1](x)
+        # __C_Decoder__._pooling_indices = list(reversed(_indices))
+        return (_x_f, _x_s, _skip_connections)
     
 class __C_Decoder__(nn.Module, __C_Module__):
     def __init__(self, enc_module_list, filter, spatial):
         super().__init__()
         _rv_mod_list = list(reversed(enc_module_list))
         self._module_list = nn.ModuleList()
+        self._non_skip_list = nn.ModuleList()
+        self._skip_list = nn.ModuleList()
         _channels = filter
+        _skip = False
+        _first_unpool_inv = False
         for i in range(len(_rv_mod_list)):
             if isinstance(_rv_mod_list[i], (*_c_const._c_activations, nn.BatchNorm2d)):
                 continue
@@ -508,30 +548,54 @@ class __C_Decoder__(nn.Module, __C_Module__):
 
             if isinstance(_mod, nn.Linear):
                 self._module_list.append(nn.Linear(_mod.out_features, _mod.in_features))
+            elif isinstance(_mod, nn.AdaptiveAvgPool2d):
+                self._module_list.append(nn.ConvTranspose2d(_channels, _channels,
+                                                            kernel_size=(spatial[0], spatial[1])))
             elif isinstance(_mod, nn.Flatten):
                 self._module_list.append(
                     nn.Unflatten(1, (_channels, spatial[0], spatial[1])))
+                continue
             elif isinstance(_mod, (nn.AvgPool2d, nn.MaxPool2d)):
+                if not _first_unpool_inv:
+                    self._module_list.append(nn.ConvTranspose2d(
+                        _channels, _channels, (2,2), (2,2)))
+                    _first_unpool_inv = True
+                else:
+                    self._module_list.append(nn.ConvTranspose2d(
+                        _channels, _channels // 2, (2,2), (2,2)))
+                    _channels //= 2
+                _skip = True
+                """self._module_list.append(nn.BatchNorm2d(_channels))
+                self._module_list.append(nn.LeakyReLU())
                 self._module_list.append(
-                    nn.ConvTranspose2d(_channels, _channels, (2,2), (2,2)))
-                _channels //= 2
-            elif isinstance(_mod, nn.Conv2d):
-                self._module_list.append(
-                    nn.ConvTranspose2d(_mod.out_channels, _mod.in_channels,
-                                       _mod.kernel_size, _mod.stride))
+                    nn.MaxUnpool2d((2,2)))"""
                 
-            if i == len(_rv_mod_list) - 1:
-                break
-
-            if isinstance(_rv_mod_list[i-1], nn.BatchNorm2d):
-                self._module_list.append(nn.BatchNorm2d(_mod.in_channels))
+            elif isinstance(_mod, nn.Conv2d):
+                if _skip:
+                    self._module_list.append(nn.Conv2d(
+                        _mod.out_channels * 2, _mod.out_channels, 
+                        _mod.kernel_size, _mod.stride, _mod.padding))
+                    _skip = False
+                    self._skip_list.append(self._module_list[-1])
+                    self._non_skip_list.append(nn.Conv2d(
+                        _mod.out_channels, _mod.out_channels,
+                        _mod.kernel_size, _mod.stride, _mod.padding))
+                else:
+                    self._module_list.append(nn.Conv2d(
+                        _mod.out_channels, _mod.out_channels,
+                        _mod.kernel_size, _mod.stride, _mod.padding))
+                    
+            if i > 0 and isinstance(_rv_mod_list[i-1], nn.BatchNorm2d):
+                self._module_list.append(nn.BatchNorm2d(self._module_list[-1].out_channels))
             
-            if isinstance(_rv_mod_list[i-1], _c_const._c_activations):
+            if i > 0 and isinstance(_rv_mod_list[i-1], _c_const._c_activations):
                 self._module_list.append(self._apply_activation(i-1, _rv_mod_list))
-            elif isinstance(_rv_mod_list[i-2], _c_const._c_activations):
+            elif i > 1 and isinstance(_rv_mod_list[i-2], _c_const._c_activations):
                 self._module_list.append(self._apply_activation(i-2, _rv_mod_list))
 
         self._module_list = self._module_list[1:] # cut out first layer (sub latent)
+        self._module_list.insert(1, nn.LeakyReLU())
+        self._module_list.append(nn.Conv2d(self._module_list[-3].out_channels, 1, (1,1), (1,1)))
 
     def _apply_activation(self, idx, rev_mod_list):
         match type(rev_mod_list[idx]):
@@ -548,7 +612,33 @@ class __C_Decoder__(nn.Module, __C_Module__):
 
         return _mod_actv
 
-    def forward(self, x):
+    def transfer_weights(self):
+        for i in range(len(self._non_skip_list)):
+            self._non_skip_list[i].weight = torch.nn.Parameter(
+                self._skip_list[i].weight[:,:self._non_skip_list[i].in_channels,:,:])
+
+    def forward(self, x, skip_connections):
+        _connection = 0
         for i in range(len(self._module_list)):
-            x = self._module_list[i](x)
+            """if i == 1:
+                x = torch.unsqueeze(x, 2)
+                x = torch.unsqueeze(x, 3)"""
+            if isinstance(self._module_list[i], nn.ConvTranspose2d):
+                x = self._module_list[i](x)
+                x = torch.concat([x, skip_connections[-1-_connection]], dim=1)
+                _connection += 1
+
+            else:
+                x = self._module_list[i](x)
         return x
+    
+    """def forward(self, x):
+        _c = 0
+        for i in range(len(self._module_list)):
+            if isinstance(self._module_list[i], nn.MaxUnpool2d):
+                x = self._module_list[i](x, __C_Decoder__._pooling_indices[_c],
+                                         __C_Decoder__._down_sampling_spatial[_c])
+                _c += 1
+            else:
+                x = self._module_list[i](x)
+        return x"""

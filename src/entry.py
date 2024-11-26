@@ -58,7 +58,7 @@ def task_1():
 ##########################
 
 _test_idx = 3
-tilesize = 164
+tilesize = 128
 
 max, min, std, mean = _c_data.global_explore([_test_idx])
 max_t, min_t, std_t, mean_t = _c_data.global_explore(
@@ -74,12 +74,14 @@ _test  = _c_data.extract([x for x in range(len(_c_data)) if x != _test_idx])
 _dataset = __C_DataSet__(_train, (mean, std))
 #_d1 = _dataset.map(image.sharper)
 #_dataset = _dataset.concat(_d1)
-_dataset = _dataset.augment_seq([image.flip, image.contrast, 
-                                 image.border_crop_and_resize], 
-                                 border=3, contrast_factor=1.2)
+_dataset = _dataset.augment_seq([image.smoother, image.sharper])
 _datasampler = __C_DataSampler__(_c_const._c_strat_skip, _dataset, tilesize, 1000)
 _dataloader  = __C_DataLoader__(_dataset, _datasampler, 8)
 _n_e = next(iter(_dataloader))
+
+_n_e = utilty.re_scale(_n_e, std=std, mean=mean)
+
+assert torch.all(_n_e >= 0)
 
 plotter.plot2D(_n_e, rows=2, cols=4, shape=(tilesize, tilesize, 1))
 
@@ -93,32 +95,34 @@ _type   = _device.type
 
 print(f"Device selected => {_type}")
 
-vae = __C_VariatonalEncoder__((1, tilesize, tilesize), 64, 2, 3, 3, 64,
-                        _c_const._c_strat_max_pooling, _c_const._c_strat_relu)
+vae = __C_VariatonalEncoder__((1, tilesize, tilesize), 256, 128, 2, 4, 3, 16,
+                        _c_const._c_strat_max_pooling, _c_const._c_strat_relu, 
+                        latent_repr="log_var")
 
 def print_function(line):
     print(line)
 
 vae.architecture(print_function)
 vae.summary(print_function)
+
 vae = vae.to(_device)
 
-vae.c_link(opt.Adam(vae.parameters(), 1e-4), _device)
+vae.c_link(opt.Adam(vae.parameters(), 1e-5), _device)
 vae.downstream_link(None, _device)
 
-vae.c_train(_dataloader, 30, alpha=0.6, beta=4, gamma=1e-5,
-            loss_regulizer=l1_regulazation_loss) # debug_mode="epoch", debug_start=10)
+vae.c_train(_dataloader, 50, alpha=0.3, beta=10, gamma=1e-4,
+            loss_regulizer=l1_regulazation_loss, debug_mode="epoch", debug_start=50)
 
 _n_e = next(iter(_dataloader))
 
 latent_v_mu, latent_v_std, x_prime = vae.c_inference(_n_e)
 
-plotter.plot2D(x_prime, rows=2, cols=4, shape=(tilesize, tilesize, 1),
+plotter.plot2D(utilty.re_scale(x_prime, std=std, mean=mean), rows=2, cols=4, shape=(tilesize, tilesize, 1),
                title="Recreating images")
 
-x_prime = vae.c_decode(10)
+x_prime = vae.c_decode(8)
 
-plotter.plot2D(x_prime, rows=2, cols=4, shape=(tilesize, tilesize, 1),
+plotter.plot2D(utilty.re_scale(x_prime, std=std, mean=mean), rows=2, cols=4, shape=(tilesize, tilesize, 1),
                title="Sampling from model")
 
 _src_dir = os.path.dirname(__file__)
@@ -140,6 +144,13 @@ _dataset = __C_DataSet__(_test, (mean_t, std_t))
 _datasampler = __C_DataSampler__(_c_const._c_strat_skip, _dataset, tilesize, 1000)
 _dataloader  = __C_DataLoader__(_dataset, _datasampler, 8)
 
+_n_e = next(iter(_dataloader))
+
+latent_v_mu, latent_v_std, x_prime = vae.c_inference(_n_e)
+
+plotter.plot2D(utilty.re_scale(x_prime, std=std, mean=mean), rows=2, cols=4, shape=(tilesize, tilesize, 1),
+               title="Inf Test Data")
+
 _reg_1 = _dataset[(0, 10, 50, 10, tilesize)]
 _reg_2 = _dataset[(0, 50, 50, 10, tilesize)]
 _sec_1 = _dataset[(0, 5, 15, 5, tilesize)]
@@ -150,7 +161,7 @@ _reg_2 = _reg_2[None, :]
 _sec_1 = _sec_1[None, :]
 _sec_2 = _sec_2[None, :]
 
-_interpolation_steps = 10
+_interpolation_steps = 8
 
 latent_v_mu_reg_1, latent_v_x_reg_1 = vae.c_encode(_reg_1)
 latent_v_mu_reg_2, latent_v_x_reg_2 = vae.c_encode(_reg_2)
@@ -175,9 +186,9 @@ _latent_repr_interpolated_sec = torch.squeeze(_latent_repr_interpolated_sec)
 _interpolated_images_reg = vae.c_decode_from_latent(_latent_repr_interpolated_reg)
 _interpolated_images_sec = vae.c_decode_from_latent(_latent_repr_interpolated_sec)
 
-plotter.plot2D(_interpolated_images_reg, rows=2, cols=5, shape=(tilesize, tilesize, 1)
+plotter.plot2D(utilty.re_scale(_interpolated_images_reg, std=std, mean=mean), rows=2, cols=4, shape=(tilesize, tilesize, 1)
                , title="interpolation1")
-plotter.plot2D(_interpolated_images_sec, rows=2, cols=5, shape=(tilesize, tilesize, 1),
+plotter.plot2D(utilty.re_scale(_interpolated_images_sec, std=std, mean=mean), rows=2, cols=4, shape=(tilesize, tilesize, 1),
                title="interpolation2")
 
 _latent_representations = []

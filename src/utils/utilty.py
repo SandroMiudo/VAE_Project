@@ -1,9 +1,10 @@
 from . import _c_types
 from . import _c_const
 import psutil
-
+import torch
 from typing import TypeVar
 from typing import List
+import random
 
 def size(n) -> _c_types._size:
     assert isinstance(n, (int))
@@ -18,6 +19,12 @@ def flatten(l:List[T], f:T) -> T:
         f.extend(_l)
 
     return f
+
+def sample_uniform(l:List[E], /):
+    return l[random.randint(0, len(l)-2)]
+
+def re_scale(x: torch.Tensor, /, *, std, mean) -> torch.Tensor:
+    return (x * std) + mean
 
 def cpu_count():
     #return len(os.sched_getaffinity(0)) # 0 -> current process, does return logical cpus somehow

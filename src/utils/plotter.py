@@ -15,7 +15,7 @@ def plot2D(x: torch.Tensor, /, *, rows:int, cols:int, shape:Tuple[int, int, int]
         for j in range(cols):
             _x = x[_c].numpy()
             assert _x.size == list(itertools.accumulate(shape, operator.mul))[-1]
-            axes[i,j].imshow(_x.reshape(shape))
+            axes[i,j].imshow(_x.reshape(shape), cmap='gray', vmin=0, vmax=255)
             _c += 1
     if show:
         plt.show()
